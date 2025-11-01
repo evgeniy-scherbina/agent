@@ -33,7 +33,7 @@ type Server struct {
 func main() {
 	// Initialize OpenAI client
 	client := openai.NewClient(
-	//option.WithAPIKey(""), // Will use OPENAI_API_KEY env var
+		//option.WithAPIKey(""), // Will use OPENAI_API_KEY env var
 	)
 
 	server := &Server{
@@ -58,8 +58,8 @@ func main() {
 
 	// Routes
 	r.Post("/api/chat", server.handleSendMessage)
-	//r.Get("/api/conversations/{id}", server.handleGetConversation)
-	//r.Get("/api/conversations", server.handleListConversations)
+	r.Get("/api/conversations/{id}", server.handleGetConversation)
+	r.Get("/api/conversations", server.handleListConversations)
 
 	fmt.Println("Server starting on :8080")
 	err := http.ListenAndServe(":8080", r)
@@ -93,4 +93,27 @@ func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(SendMessageResponse{
 		Messages: newMessages,
 	})
+}
+
+// handleGetConversation returns a specific conversation
+func (s *Server) handleGetConversation(w http.ResponseWriter, r *http.Request) {
+	conversationID := chi.URLParam(r, "id")
+
+	conv := s.chatEngine.GetConversation(conversationID)
+
+	// If conversation doesn't exist, create it (especially for "default")
+	if conv == nil {
+		conv = s.chatEngine.GetOrCreateConversation(conversationID)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(conv)
+}
+
+// handleListConversations returns all conversations
+func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request) {
+	conversations := s.chatEngine.ListConversation()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(conversations)
 }
