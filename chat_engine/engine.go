@@ -113,6 +113,7 @@ func (e *ChatEngine) SendUserMessage(conversationID, content string) ([]*Message
 	if err != nil {
 		return nil, err
 	}
+	conv.AddMessage(responseMessage)
 
 	//newMessages := make([]*Message, 0)
 	//if len(responseMessage.ToolCalls) > 0 {

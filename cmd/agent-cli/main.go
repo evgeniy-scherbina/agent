@@ -31,10 +31,12 @@ var (
 	message        string
 	conversationID string
 	serverURL      string
+	getConvID      string
+	listConvURL    string
 )
 
 var sendMessageCmd = &cobra.Command{
-	Use:   "send_message",
+	Use:   "send-message",
 	Short: "Send a message to agent",
 	Long:  `Send a message to the agent API server and receive a response.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -108,9 +110,133 @@ var sendMessageCmd = &cobra.Command{
 	},
 }
 
+var getConvCmd = &cobra.Command{
+	Use:   "get-conv",
+	Short: "Get a specific conversation by ID",
+	Long:  `Retrieve a conversation by its ID from the agent API server.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if getConvID == "" {
+			return fmt.Errorf("conversation ID is required")
+		}
+
+		// Default server URL if not provided
+		url := serverURL
+		if url == "" {
+			url = "http://localhost:8080"
+		}
+
+		// Make HTTP GET request
+		apiURL := url + "/api/conversations/" + getConvID
+		resp, err := http.Get(apiURL)
+		if err != nil {
+			return fmt.Errorf("failed to send request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		// Read response
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response: %w", err)
+		}
+
+		// Check status code
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		// Parse and display response
+		var conversation struct {
+			ID       string `json:"id"`
+			Messages []struct {
+				ID      string `json:"ID"`
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+
+		if err := json.Unmarshal(body, &conversation); err != nil {
+			// If JSON parsing fails, just print the raw response
+			fmt.Println(string(body))
+			return nil
+		}
+
+		// Display conversation
+		fmt.Printf("Conversation ID: %s\n", conversation.ID)
+		fmt.Printf("Messages (%d):\n\n", len(conversation.Messages))
+		for _, msg := range conversation.Messages {
+			fmt.Printf("[%s] %s: %s\n", msg.ID, msg.Role, msg.Content)
+		}
+
+		return nil
+	},
+}
+
+var listConvCmd = &cobra.Command{
+	Use:   "list-conv",
+	Short: "List all conversations",
+	Long:  `Retrieve a list of all conversations from the agent API server.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		// Default server URL if not provided
+		url := listConvURL
+		if url == "" {
+			url = "http://localhost:8080"
+		}
+
+		// Make HTTP GET request
+		apiURL := url + "/api/conversations"
+		resp, err := http.Get(apiURL)
+		if err != nil {
+			return fmt.Errorf("failed to send request: %w", err)
+		}
+		defer resp.Body.Close()
+
+		// Read response
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return fmt.Errorf("failed to read response: %w", err)
+		}
+
+		// Check status code
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(body))
+		}
+
+		// Parse and display response
+		var conversations []struct {
+			ID       string `json:"id"`
+			Messages []struct {
+				ID      string `json:"ID"`
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+
+		if err := json.Unmarshal(body, &conversations); err != nil {
+			// If JSON parsing fails, just print the raw response
+			fmt.Println(string(body))
+			return nil
+		}
+
+		// Display conversations
+		if len(conversations) == 0 {
+			fmt.Println("No conversations found.")
+			return nil
+		}
+
+		fmt.Printf("Found %d conversation(s):\n\n", len(conversations))
+		for i, conv := range conversations {
+			fmt.Printf("%d. Conversation ID: %s (%d messages)\n", i+1, conv.ID, len(conv.Messages))
+		}
+
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(helloCmd)
 	rootCmd.AddCommand(sendMessageCmd)
+	rootCmd.AddCommand(getConvCmd)
+	rootCmd.AddCommand(listConvCmd)
 
 	// Flags for send_message command
 	sendMessageCmd.Flags().StringVarP(&message, "message", "m", "", "Message to send to the agent (required)")
@@ -118,6 +244,14 @@ func init() {
 	sendMessageCmd.Flags().StringVarP(&serverURL, "server", "s", "http://localhost:8080", "Server URL")
 
 	sendMessageCmd.MarkFlagRequired("message")
+
+	// Flags for get-conv command
+	getConvCmd.Flags().StringVarP(&getConvID, "id", "i", "", "Conversation ID (required)")
+	getConvCmd.Flags().StringVarP(&serverURL, "server", "s", "http://localhost:8080", "Server URL")
+	getConvCmd.MarkFlagRequired("id")
+
+	// Flags for list-conv command
+	listConvCmd.Flags().StringVarP(&listConvURL, "server", "s", "http://localhost:8080", "Server URL")
 }
 
 func main() {

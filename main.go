@@ -33,7 +33,7 @@ type Server struct {
 func main() {
 	// Initialize OpenAI client
 	client := openai.NewClient(
-		//option.WithAPIKey(""), // Will use OPENAI_API_KEY env var
+	//option.WithAPIKey(""), // Will use OPENAI_API_KEY env var
 	)
 
 	server := &Server{
