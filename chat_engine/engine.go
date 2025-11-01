@@ -1,4 +1,4 @@
-package main
+package chat_engine
 
 import (
 	"context"

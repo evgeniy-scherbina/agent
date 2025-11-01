@@ -1,18 +1,33 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 
+	"github.com/evgeniy-scherbina/agent/chat_engine"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
 	"github.com/openai/openai-go/v2"
 )
 
+// SendMessageRequest represents a request to send a message
+type SendMessageRequest struct {
+	Message        string `json:"message"`
+	ConversationID string `json:"conversationId,omitempty"`
+}
+
+// SendMessageResponse represents a response from the chat
+type SendMessageResponse struct {
+	Messages []*chat_engine.Message `json:"messages"`
+	Error    string                 `json:"error,omitempty"`
+}
+
 type Server struct {
-	client *openai.Client
+	client     *openai.Client
+	chatEngine *chat_engine.ChatEngine
 }
 
 func main() {
@@ -22,7 +37,8 @@ func main() {
 	)
 
 	server := &Server{
-		client: &client,
+		client:     &client,
+		chatEngine: chat_engine.NewChatEngine(&client),
 	}
 
 	// Setup router
@@ -41,8 +57,7 @@ func main() {
 	}))
 
 	// Routes
-	_ = server
-	//r.Post("/api/chat", server.handleSendMessage)
+	r.Post("/api/chat", server.handleSendMessage)
 	//r.Get("/api/conversations/{id}", server.handleGetConversation)
 	//r.Get("/api/conversations", server.handleListConversations)
 
@@ -51,4 +66,31 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+}
+
+// handleSendMessage processes chat messages
+func (s *Server) handleSendMessage(w http.ResponseWriter, r *http.Request) {
+	var req SendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Use provided conversation ID or default
+	conversationID := req.ConversationID
+	if conversationID == "" {
+		conversationID = "default"
+	}
+
+	newMessages, err := s.chatEngine.SendUserMessage(conversationID, req.Message)
+	if err != nil {
+		http.Error(w, "Failed to send message", http.StatusInternalServerError)
+		return
+	}
+
+	// Return response
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(SendMessageResponse{
+		Messages: newMessages,
+	})
 }
