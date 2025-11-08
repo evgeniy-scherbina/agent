@@ -9,6 +9,7 @@ function App() {
   const [selectedConversationId, setSelectedConversationId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [isNewChat, setIsNewChat] = useState(false);
 
   // Load conversations on mount
   useEffect(() => {
@@ -29,8 +30,8 @@ function App() {
       const convs = await listConversations();
       setConversations(convs);
       
-      // Auto-select first conversation if none selected
-      if (!selectedConversationId && convs.length > 0) {
+      // Auto-select first conversation if none selected and not starting a new chat
+      if (!selectedConversationId && convs.length > 0 && !isNewChat) {
         setSelectedConversationId(convs[0].id);
       }
     } catch (error) {
@@ -60,7 +61,13 @@ function App() {
     setIsLoading(true);
 
     try {
-      const response = await sendMessage(messageText, conversationId);
+      // Generate a unique conversation ID for new chats
+      let actualConversationId = conversationId;
+      if (!actualConversationId && isNewChat) {
+        actualConversationId = `conv-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
+      }
+
+      const response = await sendMessage(messageText, actualConversationId);
       
       // Replace temporary message and add assistant response with actual messages from API
       setMessages(prev => {
@@ -78,11 +85,16 @@ function App() {
       // Reload conversations to get updated list
       await loadConversations();
       
-      // If no conversation was selected, select the one that was created/used
-      if (!conversationId) {
+      // If this was a new chat or no conversation was selected, select the one that was created/used
+      if (!conversationId || isNewChat) {
         const convs = await listConversations();
         if (convs.length > 0) {
-          setSelectedConversationId(convs[convs.length - 1].id);
+          // Find the conversation that matches our ID, or get the last one
+          const targetConv = actualConversationId 
+            ? convs.find(c => c.id === actualConversationId) || convs[convs.length - 1]
+            : convs[convs.length - 1];
+          setSelectedConversationId(targetConv.id);
+          setIsNewChat(false);
         }
       }
     } catch (error) {
@@ -98,10 +110,12 @@ function App() {
   const handleNewConversation = () => {
     setSelectedConversationId(null);
     setMessages([]);
+    setIsNewChat(true);
   };
 
   const handleSelectConversation = (conversationId) => {
     setSelectedConversationId(conversationId);
+    setIsNewChat(false);
   };
 
   const handleDeleteConversation = async (conversationId) => {
