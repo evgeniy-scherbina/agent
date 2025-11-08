@@ -5,17 +5,10 @@
   display: flex;
   flex-direction: column;
   border-right: 1px solid #444654;
-  transition: width 0.2s;
-}
-
-.sidebar.collapsed {
-  width: 60px;
 }
 
 .sidebar-header {
   padding: 12px;
-  display: flex;
-  gap: 8px;
   border-bottom: 1px solid #444654;
 }
 
@@ -41,21 +34,6 @@
 .new-chat-btn span {
   font-size: 18px;
   font-weight: bold;
-}
-
-.collapse-btn {
-  padding: 10px;
-  background-color: transparent;
-  border: 1px solid #565869;
-  border-radius: 6px;
-  color: #ececf1;
-  cursor: pointer;
-  font-size: 16px;
-  transition: background-color 0.2s;
-}
-
-.collapse-btn:hover {
-  background-color: #343541;
 }
 
 .conversations-list {

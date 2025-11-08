@@ -1,8 +1,6 @@
-import { useState, useEffect } from 'react';
 import './Sidebar.css';
 
 const Sidebar = ({ conversations, selectedConversationId, onSelectConversation, onNewConversation, onDeleteConversation }) => {
-  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const getConversationTitle = (conv) => {
     if (conv.messages && conv.messages.length > 0) {
@@ -15,42 +13,37 @@ const Sidebar = ({ conversations, selectedConversationId, onSelectConversation, 
   };
 
   return (
-    <div className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
+    <div className="sidebar">
       <div className="sidebar-header">
         <button className="new-chat-btn" onClick={onNewConversation}>
           <span>+</span> New Chat
         </button>
-        <button className="collapse-btn" onClick={() => setIsCollapsed(!isCollapsed)}>
-          {isCollapsed ? '→' : '←'}
-        </button>
       </div>
       
-      {!isCollapsed && (
-        <div className="conversations-list">
-          {conversations.length === 0 ? (
-            <div className="empty-state">No conversations yet</div>
-          ) : (
-            conversations.map((conv) => (
-              <div
-                key={conv.id}
-                className={`conversation-item ${selectedConversationId === conv.id ? 'active' : ''}`}
-                onClick={() => onSelectConversation(conv.id)}
+      <div className="conversations-list">
+        {conversations.length === 0 ? (
+          <div className="empty-state">No conversations yet</div>
+        ) : (
+          conversations.map((conv) => (
+            <div
+              key={conv.id}
+              className={`conversation-item ${selectedConversationId === conv.id ? 'active' : ''}`}
+              onClick={() => onSelectConversation(conv.id)}
+            >
+              <span className="conversation-title">{getConversationTitle(conv)}</span>
+              <button
+                className="delete-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDeleteConversation(conv.id);
+                }}
               >
-                <span className="conversation-title">{getConversationTitle(conv)}</span>
-                <button
-                  className="delete-btn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onDeleteConversation(conv.id);
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      )}
+                ×
+              </button>
+            </div>
+          ))
+        )}
+      </div>
     </div>
   );
 };
