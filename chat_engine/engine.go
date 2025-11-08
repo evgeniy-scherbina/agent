@@ -22,44 +22,59 @@ func (conv *Conversation) AddMessage(msg *Message) {
 	conv.Messages = append(conv.Messages, msg)
 }
 
+// ToOpenAIMessage converts a single Message to OpenAI format
+func ToOpenAIMessage(msg *Message) openai.ChatCompletionMessageParamUnion {
+	switch msg.Role {
+	case "user":
+		return openai.UserMessage(msg.Content)
+	case "assistant":
+		return ToOpenAIMessageWithTools(msg)
+	case "tool":
+		return openai.ToolMessage(msg.Content, msg.TollCallID)
+	default:
+		// Fallback for unknown roles
+		return openai.UserMessage(msg.Content)
+	}
+}
+
+// ToOpenAIMessageWithTools converts an assistant message to OpenAI format, including tool_calls if present
+func ToOpenAIMessageWithTools(msg *Message) openai.ChatCompletionMessageParamUnion {
+	if len(msg.ToolCalls) == 0 {
+		return openai.AssistantMessage(msg.Content)
+	}
+
+	assistant := openai.ChatCompletionAssistantMessageParam{
+		Content: openai.ChatCompletionAssistantMessageParamContentUnion{
+			OfString: param.NewOpt(msg.Content),
+		},
+		ToolCalls: make([]openai.ChatCompletionMessageToolCallUnionParam, len(msg.ToolCalls)),
+	}
+
+	// Convert tool calls to OpenAI format
+	for i, toolCall := range msg.ToolCalls {
+		assistant.ToolCalls[i] = openai.ChatCompletionMessageToolCallUnionParam{
+			OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+				ID:   toolCall.ID,
+				Type: constant.Function("function"),
+				Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+					Name:      toolCall.Name,
+					Arguments: toolCall.Arguments,
+				},
+			},
+		}
+	}
+
+	return openai.ChatCompletionMessageParamUnion{
+		OfAssistant: &assistant,
+	}
+}
+
 // ToOpenAIMessages return messages in a format which can be used in OpenAI API
 func (conv *Conversation) ToOpenAIMessages() []openai.ChatCompletionMessageParamUnion {
 	// Convert messages to OpenAI format
-	var openaiMessages []openai.ChatCompletionMessageParamUnion
+	openaiMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(conv.Messages))
 	for _, msg := range conv.Messages {
-		if msg.Role == "user" {
-			openaiMessages = append(openaiMessages, openai.UserMessage(msg.Content))
-		} else if msg.Role == "assistant" {
-			// If the assistant message has tool_calls, we need to include them
-			if len(msg.ToolCalls) > 0 {
-				assistant := openai.ChatCompletionAssistantMessageParam{
-					Content: openai.ChatCompletionAssistantMessageParamContentUnion{
-						OfString: param.NewOpt(msg.Content),
-					},
-					ToolCalls: make([]openai.ChatCompletionMessageToolCallUnionParam, len(msg.ToolCalls)),
-				}
-				// Convert tool calls to OpenAI format
-				for i, toolCall := range msg.ToolCalls {
-					assistant.ToolCalls[i] = openai.ChatCompletionMessageToolCallUnionParam{
-						OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
-							ID:   toolCall.ID,
-							Type: constant.Function("function"),
-							Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
-								Name:      toolCall.Name,
-								Arguments: toolCall.Arguments,
-							},
-						},
-					}
-				}
-				openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{
-					OfAssistant: &assistant,
-				})
-			} else {
-				openaiMessages = append(openaiMessages, openai.AssistantMessage(msg.Content))
-			}
-		} else if msg.Role == "tool" {
-			openaiMessages = append(openaiMessages, openai.ToolMessage(msg.Content, msg.TollCallID))
-		}
+		openaiMessages = append(openaiMessages, ToOpenAIMessage(msg))
 	}
 
 	return openaiMessages
