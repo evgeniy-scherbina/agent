@@ -97,12 +97,16 @@ var sendMessageCmd = &cobra.Command{
 			return nil
 		}
 
-		// Display messages
+		// Display messages (filter out tool messages as they're redundant - the assistant summarizes them)
 		if apiResponse.Error != "" {
 			fmt.Printf("Error: %s\n", apiResponse.Error)
 		}
 
 		for _, msg := range apiResponse.Messages {
+			// Skip tool messages - they're already interpreted by the assistant
+			if msg.Role == "tool" {
+				continue
+			}
 			fmt.Printf("[%s]: %s\n", msg.Role, msg.Content)
 		}
 
@@ -160,10 +164,23 @@ var getConvCmd = &cobra.Command{
 			return nil
 		}
 
-		// Display conversation
+		// Display conversation (filter out tool messages as they're redundant)
 		fmt.Printf("Conversation ID: %s\n", conversation.ID)
-		fmt.Printf("Messages (%d):\n\n", len(conversation.Messages))
+		
+		// Count non-tool messages for display
+		nonToolMessages := 0
 		for _, msg := range conversation.Messages {
+			if msg.Role != "tool" {
+				nonToolMessages++
+			}
+		}
+		fmt.Printf("Messages (%d):\n\n", nonToolMessages)
+		
+		for _, msg := range conversation.Messages {
+			// Skip tool messages - they're already interpreted by the assistant
+			if msg.Role == "tool" {
+				continue
+			}
 			fmt.Printf("[%s] %s: %s\n", msg.ID, msg.Role, msg.Content)
 		}
 
