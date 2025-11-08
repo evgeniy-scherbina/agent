@@ -2,7 +2,9 @@ package chat_engine
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -36,21 +38,21 @@ func (conv *Conversation) ToOpenAIMessages() []openai.ChatCompletionMessageParam
 }
 
 type Message struct {
-	ID      string `json:"ID"`
-	Role    string `json:"role"` // "user", "assistant", "tool"
-	Content string `json:"content"`
-	//ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	ID        string     `json:"ID"`
+	Role      string     `json:"role"` // "user", "assistant", "tool"
+	Content   string     `json:"content"`
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 
 	// If non-empty - means it's a response to LLM tool call request
 	TollCallID string
 }
 
-//type ToolCall struct {
-//	ID        string `json:"id"`
-//	Type      string `json:"type"`
-//	Name      string `json:"name"`
-//	Arguments string `json:"arguments"`
-//}
+type ToolCall struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
 
 type ChatEngine struct {
 	client             *openai.Client
@@ -115,18 +117,20 @@ func (e *ChatEngine) SendUserMessage(conversationID, content string) ([]*Message
 	}
 	conv.AddMessage(responseMessage)
 
-	//newMessages := make([]*Message, 0)
-	//if len(responseMessage.ToolCalls) > 0 {
-	//	newMessages, err = e.executeLLMRequestedToolCalls(conv, responseMessage.ToolCalls)
-	//	if err != nil {
-	//		return nil, err
-	//	}
-	//}
+	log.Printf("going to execute %v tool calls", len(responseMessage.ToolCalls))
+	toolMessages := make([]*Message, 0)
+	if len(responseMessage.ToolCalls) > 0 {
+		toolMessages, err = e.executeLLMRequestedToolCalls(conv, responseMessage.ToolCalls)
+		if err != nil {
+			log.Printf("can't executeLLMRequestedToolCalls: %v", err)
+			return nil, err
+		}
+	}
 
 	allNewMessages := make([]*Message, 0)
 	allNewMessages = append(allNewMessages, &userMessage) // Include user message
 	allNewMessages = append(allNewMessages, responseMessage)
-	//allNewMessages = append(allNewMessages, newMessages...)
+	allNewMessages = append(allNewMessages, toolMessages...)
 
 	return allNewMessages, nil
 }
@@ -136,8 +140,8 @@ func (e *ChatEngine) sendUserMessageToLLM(conv *Conversation) (*Message, error) 
 
 	params := openai.ChatCompletionNewParams{
 		Messages: conv.ToOpenAIMessages(),
-		//Tools:    allTools,
-		Model: openai.ChatModelGPT4o,
+		Tools:    allTools,
+		Model:    openai.ChatModelGPT4o,
 	}
 
 	completion, err := e.client.Chat.Completions.New(ctx, params)
@@ -145,22 +149,81 @@ func (e *ChatEngine) sendUserMessageToLLM(conv *Conversation) (*Message, error) 
 		return nil, err
 	}
 
-	//toolCalls := make([]ToolCall, len(completion.Choices[0].Message.ToolCalls))
-	//for i, toolCall := range completion.Choices[0].Message.ToolCalls {
-	//	toolCalls[i] = ToolCall{
-	//		ID:        toolCall.ID,
-	//		Type:      string(toolCall.Type),
-	//		Name:      toolCall.Function.Name,
-	//		Arguments: toolCall.Function.Arguments,
-	//	}
-	//}
+	toolCalls := make([]ToolCall, len(completion.Choices[0].Message.ToolCalls))
+	for i, toolCall := range completion.Choices[0].Message.ToolCalls {
+		toolCalls[i] = ToolCall{
+			ID:        toolCall.ID,
+			Type:      string(toolCall.Type),
+			Name:      toolCall.Function.Name,
+			Arguments: toolCall.Function.Arguments,
+		}
+	}
 
 	responseMessage := Message{
-		ID:      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-		Role:    "assistant",
-		Content: completion.Choices[0].Message.Content,
-		//ToolCalls: toolCalls,
+		ID:        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+		Role:      "assistant",
+		Content:   completion.Choices[0].Message.Content,
+		ToolCalls: toolCalls,
 	}
 
 	return &responseMessage, nil
+}
+
+func (e *ChatEngine) executeLLMRequestedToolCalls(
+	conv *Conversation,
+	toolCalls []ToolCall,
+) ([]*Message, error) {
+	newMessages := make([]*Message, 0)
+
+	// Handle tool calls
+	for _, toolCall := range toolCalls {
+		// Execute bash command if it's a bash_command tool call
+		if toolCall.Name == "bash_command" {
+			var args map[string]interface{}
+			if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
+				continue
+			}
+			command, ok := args["command"].(string)
+			if !ok {
+				continue
+			}
+
+			output, err := executeBashCommand(command)
+			if err != nil {
+				fmt.Printf("Error executing bash command: %v, output: %s\n", err, output)
+			}
+
+			// Add tool response message
+			toolMessage := Message{
+				ID:         fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+				Role:       "tool",
+				Content:    output,
+				TollCallID: toolCall.ID,
+			}
+			conv.AddMessage(&toolMessage)
+			newMessages = append(newMessages, &toolMessage)
+		}
+	}
+
+	// Get final response from OpenAI
+
+	params := openai.ChatCompletionNewParams{
+		Messages: conv.ToOpenAIMessages(),
+		Tools:    allTools,
+		Model:    openai.ChatModelGPT4o,
+	}
+	finalCompletion, err := e.client.Chat.Completions.New(context.Background(), params)
+	if err != nil {
+		return nil, err
+	}
+
+	finalMessage := Message{
+		ID:      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+		Role:    "tool",
+		Content: finalCompletion.Choices[0].Message.Content,
+	}
+	conv.AddMessage(&finalMessage)
+	newMessages = append(newMessages, &finalMessage)
+
+	return newMessages, nil
 }
