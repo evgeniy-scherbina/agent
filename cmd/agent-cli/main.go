@@ -84,9 +84,13 @@ var sendMessageCmd = &cobra.Command{
 		// Parse and display response
 		var apiResponse struct {
 			Messages []struct {
-				ID      string `json:"ID"`
-				Role    string `json:"role"`
-				Content string `json:"content"`
+				ID        string `json:"ID"`
+				Role      string `json:"role"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"tool_calls,omitempty"`
 			} `json:"messages"`
 			Error string `json:"error,omitempty"`
 		}
@@ -107,7 +111,18 @@ var sendMessageCmd = &cobra.Command{
 			if msg.Role == "tool" {
 				continue
 			}
-			fmt.Printf("[%s]: %s\n", msg.Role, msg.Content)
+			
+			// Handle assistant messages that are calling tools
+			content := msg.Content
+			if msg.Role == "assistant" && content == "" && len(msg.ToolCalls) > 0 {
+				if len(msg.ToolCalls) == 1 {
+					content = fmt.Sprintf("calling tool: %s", msg.ToolCalls[0].Name)
+				} else {
+					content = fmt.Sprintf("calling %d tools", len(msg.ToolCalls))
+				}
+			}
+			
+			fmt.Printf("[%s]: %s\n", msg.Role, content)
 		}
 
 		return nil
@@ -152,9 +167,13 @@ var getConvCmd = &cobra.Command{
 		var conversation struct {
 			ID       string `json:"id"`
 			Messages []struct {
-				ID      string `json:"ID"`
-				Role    string `json:"role"`
-				Content string `json:"content"`
+				ID        string `json:"ID"`
+				Role      string `json:"role"`
+				Content   string `json:"content"`
+				ToolCalls []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"tool_calls,omitempty"`
 			} `json:"messages"`
 		}
 
@@ -181,7 +200,18 @@ var getConvCmd = &cobra.Command{
 			if msg.Role == "tool" {
 				continue
 			}
-			fmt.Printf("[%s] %s: %s\n", msg.ID, msg.Role, msg.Content)
+			
+			// Handle assistant messages that are calling tools
+			content := msg.Content
+			if msg.Role == "assistant" && content == "" && len(msg.ToolCalls) > 0 {
+				if len(msg.ToolCalls) == 1 {
+					content = fmt.Sprintf("calling tool: %s", msg.ToolCalls[0].Name)
+				} else {
+					content = fmt.Sprintf("calling %d tools", len(msg.ToolCalls))
+				}
+			}
+			
+			fmt.Printf("[%s] %s: %s\n", msg.ID, msg.Role, content)
 		}
 
 		return nil
