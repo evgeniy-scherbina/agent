@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/openai/openai-go/v2"
+	"github.com/openai/openai-go/v2/packages/param"
+	"github.com/openai/openai-go/v2/shared/constant"
 )
 
 type Conversation struct {
@@ -28,7 +30,33 @@ func (conv *Conversation) ToOpenAIMessages() []openai.ChatCompletionMessageParam
 		if msg.Role == "user" {
 			openaiMessages = append(openaiMessages, openai.UserMessage(msg.Content))
 		} else if msg.Role == "assistant" {
-			openaiMessages = append(openaiMessages, openai.AssistantMessage(msg.Content))
+			// If the assistant message has tool_calls, we need to include them
+			if len(msg.ToolCalls) > 0 {
+				assistant := openai.ChatCompletionAssistantMessageParam{
+					Content: openai.ChatCompletionAssistantMessageParamContentUnion{
+						OfString: param.NewOpt(msg.Content),
+					},
+					ToolCalls: make([]openai.ChatCompletionMessageToolCallUnionParam, len(msg.ToolCalls)),
+				}
+				// Convert tool calls to OpenAI format
+				for i, toolCall := range msg.ToolCalls {
+					assistant.ToolCalls[i] = openai.ChatCompletionMessageToolCallUnionParam{
+						OfFunction: &openai.ChatCompletionMessageFunctionToolCallParam{
+							ID:   toolCall.ID,
+							Type: constant.Function("function"),
+							Function: openai.ChatCompletionMessageFunctionToolCallFunctionParam{
+								Name:      toolCall.Name,
+								Arguments: toolCall.Arguments,
+							},
+						},
+					}
+				}
+				openaiMessages = append(openaiMessages, openai.ChatCompletionMessageParamUnion{
+					OfAssistant: &assistant,
+				})
+			} else {
+				openaiMessages = append(openaiMessages, openai.AssistantMessage(msg.Content))
+			}
 		} else if msg.Role == "tool" {
 			openaiMessages = append(openaiMessages, openai.ToolMessage(msg.Content, msg.TollCallID))
 		}
@@ -214,12 +242,13 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 	}
 	finalCompletion, err := e.client.Chat.Completions.New(context.Background(), params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("can't send message with tool responses: %v", err)
 	}
 
+	// The final response from OpenAI is an assistant message, not a tool message
 	finalMessage := Message{
 		ID:      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-		Role:    "tool",
+		Role:    "assistant",
 		Content: finalCompletion.Choices[0].Message.Content,
 	}
 	conv.AddMessage(&finalMessage)
