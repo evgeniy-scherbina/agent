@@ -48,16 +48,31 @@ function App() {
   };
 
   const handleSendMessage = async (messageText, conversationId) => {
+    // Create a temporary user message to show immediately (optimistic update)
+    const tempUserMessage = {
+      ID: `temp-${Date.now()}`,
+      role: 'user',
+      content: messageText,
+    };
+
+    // Add user message immediately to the UI
+    setMessages(prev => [...prev, tempUserMessage]);
     setIsLoading(true);
+
     try {
       const response = await sendMessage(messageText, conversationId);
       
-      // Update messages with the response
+      // Replace temporary message and add assistant response with actual messages from API
       setMessages(prev => {
-        // Filter out any existing messages that might be duplicates
-        const existingIds = new Set(prev.map(m => m.ID));
+        // Remove the temporary message
+        const withoutTemp = prev.filter(m => m.ID !== tempUserMessage.ID);
+        
+        // Add the actual messages from the API response
+        // The API returns both user and assistant messages, so we need to merge them
+        const existingIds = new Set(withoutTemp.map(m => m.ID));
         const newMessages = response.messages.filter(m => !existingIds.has(m.ID));
-        return [...prev, ...newMessages];
+        
+        return [...withoutTemp, ...newMessages];
       });
 
       // Reload conversations to get updated list
@@ -72,6 +87,8 @@ function App() {
       }
     } catch (error) {
       console.error('Failed to send message:', error);
+      // Remove the temporary message on error
+      setMessages(prev => prev.filter(m => m.ID !== tempUserMessage.ID));
       alert('Failed to send message. Please try again.');
     } finally {
       setIsLoading(false);
