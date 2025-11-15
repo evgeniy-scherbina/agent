@@ -41,3 +41,53 @@
   color: #ececf1;
 }
 
+.tool-calls-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.tool-call-item {
+  background-color: rgba(0, 0, 0, 0.2);
+  border-radius: 6px;
+  padding: 12px;
+  border-left: 3px solid #10a37f;
+}
+
+.tool-call-name {
+  color: #10a37f;
+  font-size: 14px;
+  margin-bottom: 8px;
+}
+
+.tool-call-name strong {
+  font-weight: 600;
+}
+
+.tool-call-params {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.tool-call-param {
+  display: flex;
+  gap: 8px;
+  font-size: 13px;
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+}
+
+.param-key {
+  color: #8e8ea0;
+  font-weight: 500;
+  min-width: 80px;
+}
+
+.param-value {
+  color: #ececf1;
+  flex: 1;
+  word-break: break-all;
+}
+
