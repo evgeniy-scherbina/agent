@@ -216,58 +216,88 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 	conv *Conversation,
 	toolCalls []ToolCall,
 ) ([]*Message, error) {
-	newMessages := make([]*Message, 0)
+	allNewMessages := make([]*Message, 0)
+	maxIterations := 10 // Prevent infinite loops
+	iteration := 0
 
-	// Handle tool calls
-	for _, toolCall := range toolCalls {
-		// Execute bash command if it's a bash_command tool call
-		if toolCall.Name == "bash_command" {
-			var args map[string]interface{}
-			if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
-				continue
-			}
-			command, ok := args["command"].(string)
-			if !ok {
-				continue
-			}
+	for len(toolCalls) > 0 && iteration < maxIterations {
+		iteration++
+		log.Printf("Tool call iteration %d: executing %d tool calls", iteration, len(toolCalls))
 
-			output, err := executeBashCommand(command)
-			if err != nil {
-				fmt.Printf("Error executing bash command: %v, output: %s\n", err, output)
-			}
+		// Execute all tool calls in this round
+		for _, toolCall := range toolCalls {
+			// Execute bash command if it's a bash_command tool call
+			if toolCall.Name == "bash_command" {
+				var args map[string]interface{}
+				if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
+					log.Printf("Error parsing tool call arguments: %v", err)
+					continue
+				}
+				command, ok := args["command"].(string)
+				if !ok {
+					log.Printf("Tool call missing command argument")
+					continue
+				}
 
-			// Add tool response message
-			toolMessage := Message{
-				ID:         fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-				Role:       "tool",
-				Content:    output,
-				TollCallID: toolCall.ID,
+				output, err := executeBashCommand(command)
+				if err != nil {
+					fmt.Printf("Error executing bash command: %v, output: %s\n", err, output)
+				}
+
+				// Add tool response message
+				toolMessage := Message{
+					ID:         fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+					Role:       "tool",
+					Content:    output,
+					TollCallID: toolCall.ID,
+				}
+				conv.AddMessage(&toolMessage)
+				allNewMessages = append(allNewMessages, &toolMessage)
 			}
-			conv.AddMessage(&toolMessage)
-			newMessages = append(newMessages, &toolMessage)
+		}
+
+		// Get response from OpenAI after tool execution
+		params := openai.ChatCompletionNewParams{
+			Messages: conv.ToOpenAIMessages(),
+			Tools:    allTools,
+			Model:    openai.ChatModelGPT4o,
+		}
+		completion, err := e.client.Chat.Completions.New(context.Background(), params)
+		if err != nil {
+			return nil, fmt.Errorf("can't send message with tool responses: %v", err)
+		}
+
+		// Extract tool calls from the response
+		toolCalls = make([]ToolCall, len(completion.Choices[0].Message.ToolCalls))
+		for i, toolCall := range completion.Choices[0].Message.ToolCalls {
+			toolCalls[i] = ToolCall{
+				ID:        toolCall.ID,
+				Type:      string(toolCall.Type),
+				Name:      toolCall.Function.Name,
+				Arguments: toolCall.Function.Arguments,
+			}
+		}
+
+		// Create assistant message
+		assistantMessage := Message{
+			ID:        fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+			Role:      "assistant",
+			Content:   completion.Choices[0].Message.Content,
+			ToolCalls: toolCalls,
+		}
+		conv.AddMessage(&assistantMessage)
+		allNewMessages = append(allNewMessages, &assistantMessage)
+
+		// If there are no more tool calls, we're done
+		if len(toolCalls) == 0 {
+			log.Printf("No more tool calls, conversation complete")
+			break
 		}
 	}
 
-	// Get final response from OpenAI
-
-	params := openai.ChatCompletionNewParams{
-		Messages: conv.ToOpenAIMessages(),
-		Tools:    allTools,
-		Model:    openai.ChatModelGPT4o,
-	}
-	finalCompletion, err := e.client.Chat.Completions.New(context.Background(), params)
-	if err != nil {
-		return nil, fmt.Errorf("can't send message with tool responses: %v", err)
+	if iteration >= maxIterations {
+		log.Printf("Warning: reached max iterations (%d) for tool calls", maxIterations)
 	}
 
-	// The final response from OpenAI is an assistant message, not a tool message
-	finalMessage := Message{
-		ID:      fmt.Sprintf("msg_%d", time.Now().UnixNano()),
-		Role:    "assistant",
-		Content: finalCompletion.Choices[0].Message.Content,
-	}
-	conv.AddMessage(&finalMessage)
-	newMessages = append(newMessages, &finalMessage)
-
-	return newMessages, nil
+	return allNewMessages, nil
 }
