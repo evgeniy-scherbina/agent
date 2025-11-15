@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
-import { sendMessage, getConversation, listConversations } from './services/api';
+import { sendMessage, sendMessageStream, getConversation, listConversations } from './services/api';
 import './App.css';
 
 function App() {
@@ -67,19 +67,24 @@ function App() {
         actualConversationId = `conv-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`;
       }
 
-      const response = await sendMessage(messageText, actualConversationId);
-      
-      // Replace temporary message and add assistant response with actual messages from API
-      setMessages(prev => {
-        // Remove the temporary message
-        const withoutTemp = prev.filter(m => m.ID !== tempUserMessage.ID);
-        
-        // Add the actual messages from the API response
-        // The API returns both user and assistant messages, so we need to merge them
-        const existingIds = new Set(withoutTemp.map(m => m.ID));
-        const newMessages = response.messages.filter(m => !existingIds.has(m.ID));
-        
-        return [...withoutTemp, ...newMessages];
+      // Use streaming for real-time updates
+      await sendMessageStream(messageText, actualConversationId, (message) => {
+        setMessages(prev => {
+          // Remove temporary user message once we get the real one
+          const withoutTemp = prev.filter(m => m.ID !== tempUserMessage.ID);
+          
+          // Check if this message already exists
+          const existingIndex = withoutTemp.findIndex(m => m.ID === message.ID);
+          if (existingIndex >= 0) {
+            // Update existing message
+            const updated = [...withoutTemp];
+            updated[existingIndex] = message;
+            return updated;
+          } else {
+            // Add new message
+            return [...withoutTemp, message];
+          }
+        });
       });
 
       // Reload conversations to get updated list
