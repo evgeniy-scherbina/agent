@@ -144,7 +144,14 @@ func (e *ChatEngine) GetOrCreateConversation(conversationID string) *Conversatio
 	return conv
 }
 
+// MessageUpdateCallback is called whenever a new message is added during processing
+type MessageUpdateCallback func(*Message)
+
 func (e *ChatEngine) SendUserMessage(conversationID, content string) ([]*Message, error) {
+	return e.SendUserMessageWithCallback(conversationID, content, nil)
+}
+
+func (e *ChatEngine) SendUserMessageWithCallback(conversationID, content string, callback MessageUpdateCallback) ([]*Message, error) {
 	conv := e.GetOrCreateConversation(conversationID)
 
 	userMessage := Message{
@@ -153,17 +160,23 @@ func (e *ChatEngine) SendUserMessage(conversationID, content string) ([]*Message
 		Content: content,
 	}
 	conv.AddMessage(&userMessage)
+	if callback != nil {
+		callback(&userMessage)
+	}
 
 	responseMessage, err := e.sendUserMessageToLLM(conv)
 	if err != nil {
 		return nil, err
 	}
 	conv.AddMessage(responseMessage)
+	if callback != nil {
+		callback(responseMessage)
+	}
 
 	log.Printf("going to execute %v tool calls", len(responseMessage.ToolCalls))
 	toolMessages := make([]*Message, 0)
 	if len(responseMessage.ToolCalls) > 0 {
-		toolMessages, err = e.executeLLMRequestedToolCalls(conv, responseMessage.ToolCalls)
+		toolMessages, err = e.executeLLMRequestedToolCalls(conv, responseMessage.ToolCalls, callback)
 		if err != nil {
 			log.Printf("can't executeLLMRequestedToolCalls: %v", err)
 			return nil, err
@@ -215,6 +228,7 @@ func (e *ChatEngine) sendUserMessageToLLM(conv *Conversation) (*Message, error) 
 func (e *ChatEngine) executeLLMRequestedToolCalls(
 	conv *Conversation,
 	toolCalls []ToolCall,
+	callback MessageUpdateCallback,
 ) ([]*Message, error) {
 	allNewMessages := make([]*Message, 0)
 	maxIterations := 10 // Prevent infinite loops
@@ -253,6 +267,9 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 				}
 				conv.AddMessage(&toolMessage)
 				allNewMessages = append(allNewMessages, &toolMessage)
+				if callback != nil {
+					callback(&toolMessage)
+				}
 			}
 		}
 
@@ -287,6 +304,9 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 		}
 		conv.AddMessage(&assistantMessage)
 		allNewMessages = append(allNewMessages, &assistantMessage)
+		if callback != nil {
+			callback(&assistantMessage)
+		}
 
 		// If there are no more tool calls, we're done
 		if len(toolCalls) == 0 {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/evgeniy-scherbina/agent/chat_engine"
 	"github.com/go-chi/chi/v5"
@@ -58,6 +59,7 @@ func main() {
 
 	// Routes
 	r.Post("/api/chat", server.handleSendMessage)
+	r.Post("/api/chat/stream", server.handleSendMessageStream)
 	r.Get("/api/conversations/{id}", server.handleGetConversation)
 	r.Get("/api/conversations", server.handleListConversations)
 
@@ -116,4 +118,81 @@ func (s *Server) handleListConversations(w http.ResponseWriter, r *http.Request)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(conversations)
+}
+
+// handleSendMessageStream processes chat messages with Server-Sent Events streaming
+func (s *Server) handleSendMessageStream(w http.ResponseWriter, r *http.Request) {
+	var req SendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Use provided conversation ID or default
+	conversationID := req.ConversationID
+	if conversationID == "" {
+		conversationID = "default"
+	}
+
+	// Set up SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Create a flusher to send data immediately
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Send initial connection message
+	fmt.Fprintf(w, "data: %s\n\n", `{"type":"connected"}`)
+	flusher.Flush()
+
+	// Callback to send messages as they're created
+	callback := func(msg *chat_engine.Message) {
+		msgJSON, err := json.Marshal(msg)
+		if err != nil {
+			log.Printf("Error marshaling message for stream: %v", err)
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", string(msgJSON))
+		flusher.Flush()
+	}
+
+	// Process message with streaming updates in a goroutine
+	done := make(chan bool)
+	go func() {
+		defer func() {
+			done <- true
+		}()
+
+		_, err := s.chatEngine.SendUserMessageWithCallback(conversationID, req.Message, callback)
+		if err != nil {
+			errorMsg := fmt.Sprintf(`{"type":"error","error":"%s"}`, err.Error())
+			fmt.Fprintf(w, "data: %s\n\n", errorMsg)
+			flusher.Flush()
+		} else {
+			// Send completion message
+			fmt.Fprintf(w, "data: %s\n\n", `{"type":"done"}`)
+			flusher.Flush()
+		}
+	}()
+
+	// Keep connection alive and wait for completion
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-done:
+			return
+		case <-ticker.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		}
+	}
 }
