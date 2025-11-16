@@ -122,3 +122,34 @@ export const listConversations = async () => {
   return response.json();
 };
 
+/**
+ * List all running background processes
+ * @returns {Promise<Array<{pid: number, command: string, start_time: string, conversation_id: string}>>}
+ */
+export const listProcesses = async () => {
+  const response = await fetch(`${API_BASE_URL}/api/processes`);
+
+  if (!response.ok) {
+    throw new Error(`Failed to list processes: ${response.statusText}`);
+  }
+
+  return response.json();
+};
+
+/**
+ * Kill a background process by PID
+ * @param {number} pid - The process ID to kill
+ * @returns {Promise<{success: boolean, message: string}>}
+ */
+export const killProcess = async (pid) => {
+  const response = await fetch(`${API_BASE_URL}/api/processes/${pid}/kill`, {
+    method: 'POST',
+  });
+
+  if (!response.ok) {
+    throw new Error(`Failed to kill process: ${response.statusText}`);
+  }
+
+  return response.json();
+};
+

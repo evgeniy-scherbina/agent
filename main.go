@@ -62,6 +62,8 @@ func main() {
 	r.Post("/api/chat/stream", server.handleSendMessageStream)
 	r.Get("/api/conversations/{id}", server.handleGetConversation)
 	r.Get("/api/conversations", server.handleListConversations)
+	r.Get("/api/processes", server.handleListProcesses)
+	r.Post("/api/processes/{pid}/kill", server.handleKillProcess)
 
 	fmt.Println("Server starting on :8080")
 	err := http.ListenAndServe(":8080", r)
@@ -195,4 +197,34 @@ func (s *Server) handleSendMessageStream(w http.ResponseWriter, r *http.Request)
 			flusher.Flush()
 		}
 	}
+}
+
+// handleListProcesses returns all running background processes
+func (s *Server) handleListProcesses(w http.ResponseWriter, r *http.Request) {
+	processes := s.chatEngine.GetProcesses()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(processes)
+}
+
+// handleKillProcess kills a background process by PID
+func (s *Server) handleKillProcess(w http.ResponseWriter, r *http.Request) {
+	pidStr := chi.URLParam(r, "pid")
+	var pid int
+	if _, err := fmt.Sscanf(pidStr, "%d", &pid); err != nil {
+		http.Error(w, "Invalid PID", http.StatusBadRequest)
+		return
+	}
+
+	err := s.chatEngine.KillProcess(pid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Process %d killed", pid),
+	})
 }

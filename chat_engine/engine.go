@@ -147,6 +147,16 @@ func (e *ChatEngine) GetOrCreateConversation(conversationID string) *Conversatio
 	return conv
 }
 
+// GetProcesses returns all running background processes
+func (e *ChatEngine) GetProcesses() []*ProcessInfo {
+	return e.processManager.ListProcesses()
+}
+
+// KillProcess kills a background process by PID
+func (e *ChatEngine) KillProcess(pid int) error {
+	return e.processManager.KillProcess(pid)
+}
+
 // MessageUpdateCallback is called whenever a new message is added during processing
 type MessageUpdateCallback func(*Message)
 

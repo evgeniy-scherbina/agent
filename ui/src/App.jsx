@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import Sidebar from './components/Sidebar';
 import ChatInterface from './components/ChatInterface';
+import ProcessPanel from './components/ProcessPanel';
 import { sendMessage, sendMessageStream, getConversation, listConversations } from './services/api';
 import './App.css';
 
@@ -156,6 +157,7 @@ function App() {
         onSendMessage={handleSendMessage}
         isLoading={isLoading}
       />
+      <ProcessPanel />
     </div>
   );
 }
