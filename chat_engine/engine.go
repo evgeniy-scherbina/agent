@@ -23,6 +23,12 @@ func (conv *Conversation) AddMessage(msg *Message) {
 	conv.Messages = append(conv.Messages, msg)
 }
 
+// AddMessageWithDB adds a message to the conversation and saves it to the database
+func (conv *Conversation) AddMessageWithDB(msg *Message, db *DB) error {
+	conv.Messages = append(conv.Messages, msg)
+	return db.SaveMessage(conv.ID, msg)
+}
+
 // ToOpenAIMessage converts a single Message to OpenAI format
 func ToOpenAIMessage(msg *Message) openai.ChatCompletionMessageParamUnion {
 	switch msg.Role {
@@ -102,22 +108,75 @@ type ChatEngine struct {
 	client         *openai.Client
 	conversations  map[string]*Conversation
 	processManager *ProcessManager
+	db             *DB
 	conversationsMutex sync.RWMutex
 }
 
-func NewChatEngine(client *openai.Client) *ChatEngine {
-	return &ChatEngine{
+func NewChatEngine(client *openai.Client) (*ChatEngine, error) {
+	// Initialize database
+	db, err := NewDB("agent.db")
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize database: %w", err)
+	}
+
+	engine := &ChatEngine{
 		client:         client,
 		conversations:  make(map[string]*Conversation),
 		processManager: NewProcessManager(),
+		db:             db,
 		conversationsMutex: sync.RWMutex{},
 	}
+
+	// Load all conversations from database
+	if err := engine.loadAllConversations(); err != nil {
+		log.Printf("Warning: failed to load conversations from database: %v", err)
+	}
+
+	return engine, nil
+}
+
+func (e *ChatEngine) loadAllConversations() error {
+	conversationIDs, err := e.db.ListConversations()
+	if err != nil {
+		return err
+	}
+
+	for _, id := range conversationIDs {
+		conv, err := e.db.LoadConversation(id)
+		if err != nil {
+			log.Printf("Failed to load conversation %s: %v", id, err)
+			continue
+		}
+		if conv != nil {
+			e.conversationsMutex.Lock()
+			e.conversations[id] = conv
+			e.conversationsMutex.Unlock()
+		}
+	}
+
+	log.Printf("Loaded %d conversations from database", len(conversationIDs))
+	return nil
 }
 
 func (e *ChatEngine) GetConversation(conversationID string) *Conversation {
 	e.conversationsMutex.RLock()
 	conv := e.conversations[conversationID]
 	e.conversationsMutex.RUnlock()
+
+	// If not in memory, try loading from database
+	if conv == nil {
+		dbConv, err := e.db.LoadConversation(conversationID)
+		if err != nil {
+			log.Printf("Failed to load conversation from database: %v", err)
+			return nil
+		}
+		if dbConv != nil {
+			e.conversationsMutex.Lock()
+			e.conversations[conversationID] = dbConv
+			e.conversationsMutex.Unlock()
+			return dbConv
+		}
+	}
 
 	return conv
 }
@@ -132,16 +191,41 @@ func (e *ChatEngine) ListConversation() []*Conversation {
 }
 
 func (e *ChatEngine) GetOrCreateConversation(conversationID string) *Conversation {
-	// Get or create conversation
-	e.conversationsMutex.Lock()
-	conv, exists := e.conversations[conversationID]
-	if !exists {
-		conv = &Conversation{
-			ID:       conversationID,
-			Messages: make([]*Message, 0),
-		}
-		e.conversations[conversationID] = conv
+	// Try to get from memory first
+	e.conversationsMutex.RLock()
+	conv := e.conversations[conversationID]
+	e.conversationsMutex.RUnlock()
+
+	if conv != nil {
+		return conv
 	}
+
+	// Try loading from database
+	dbConv, err := e.db.LoadConversation(conversationID)
+	if err != nil {
+		log.Printf("Failed to load conversation from database: %v", err)
+	}
+
+	if dbConv != nil {
+		e.conversationsMutex.Lock()
+		e.conversations[conversationID] = dbConv
+		e.conversationsMutex.Unlock()
+		return dbConv
+	}
+
+	// Create new conversation
+	conv = &Conversation{
+		ID:       conversationID,
+		Messages: make([]*Message, 0),
+	}
+
+	// Save to database
+	if err := e.db.SaveConversation(conv); err != nil {
+		log.Printf("Failed to save new conversation to database: %v", err)
+	}
+
+	e.conversationsMutex.Lock()
+	e.conversations[conversationID] = conv
 	e.conversationsMutex.Unlock()
 
 	return conv
@@ -172,7 +256,9 @@ func (e *ChatEngine) SendUserMessageWithCallback(conversationID, content string,
 		Role:    "user",
 		Content: content,
 	}
-	conv.AddMessage(&userMessage)
+	if err := conv.AddMessageWithDB(&userMessage, e.db); err != nil {
+		log.Printf("Failed to save user message to database: %v", err)
+	}
 	if callback != nil {
 		callback(&userMessage)
 	}
@@ -181,7 +267,9 @@ func (e *ChatEngine) SendUserMessageWithCallback(conversationID, content string,
 	if err != nil {
 		return nil, err
 	}
-	conv.AddMessage(responseMessage)
+	if err := conv.AddMessageWithDB(responseMessage, e.db); err != nil {
+		log.Printf("Failed to save assistant message to database: %v", err)
+	}
 	if callback != nil {
 		callback(responseMessage)
 	}
@@ -324,11 +412,13 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 				Content:    output,
 				TollCallID: toolCall.ID,
 			}
-			conv.AddMessage(&toolMessage)
+			if err := conv.AddMessageWithDB(&toolMessage, e.db); err != nil {
+				log.Printf("Failed to save tool message to database: %v", err)
+			}
 			allNewMessages = append(allNewMessages, &toolMessage)
 			if callback != nil {
 				callback(&toolMessage)
-		}
+			}
 	}
 
 		// Get response from OpenAI after tool execution
@@ -359,8 +449,10 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 			Role:      "assistant",
 			Content:   completion.Choices[0].Message.Content,
 			ToolCalls: toolCalls,
-	}
-		conv.AddMessage(&assistantMessage)
+		}
+		if err := conv.AddMessageWithDB(&assistantMessage, e.db); err != nil {
+			log.Printf("Failed to save assistant message to database: %v", err)
+		}
 		allNewMessages = append(allNewMessages, &assistantMessage)
 		if callback != nil {
 			callback(&assistantMessage)

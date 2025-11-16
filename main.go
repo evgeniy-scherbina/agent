@@ -37,9 +37,14 @@ func main() {
 	//option.WithAPIKey(""), // Will use OPENAI_API_KEY env var
 	)
 
+	chatEngine, err := chat_engine.NewChatEngine(&client)
+	if err != nil {
+		log.Fatalf("Failed to initialize chat engine: %v", err)
+	}
+
 	server := &Server{
 		client:     &client,
-		chatEngine: chat_engine.NewChatEngine(&client),
+		chatEngine: chatEngine,
 	}
 
 	// Setup router
@@ -66,8 +71,7 @@ func main() {
 	r.Post("/api/processes/{pid}/kill", server.handleKillProcess)
 
 	fmt.Println("Server starting on :8080")
-	err := http.ListenAndServe(":8080", r)
-	if err != nil {
+	if err := http.ListenAndServe(":8080", r); err != nil {
 		log.Fatal(err)
 	}
 }
