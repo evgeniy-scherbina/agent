@@ -105,10 +105,10 @@ type ToolCall struct {
 }
 
 type ChatEngine struct {
-	client         *openai.Client
-	conversations  map[string]*Conversation
-	processManager *ProcessManager
-	db             *DB
+	client             *openai.Client
+	conversations      map[string]*Conversation
+	processManager     *ProcessManager
+	db                 *DB
 	conversationsMutex sync.RWMutex
 }
 
@@ -120,10 +120,10 @@ func NewChatEngine(client *openai.Client) (*ChatEngine, error) {
 	}
 
 	engine := &ChatEngine{
-		client:         client,
-		conversations:  make(map[string]*Conversation),
-		processManager: NewProcessManager(),
-		db:             db,
+		client:             client,
+		conversations:      make(map[string]*Conversation),
+		processManager:     NewProcessManager(),
+		db:                 db,
 		conversationsMutex: sync.RWMutex{},
 	}
 
@@ -298,7 +298,7 @@ func (e *ChatEngine) sendUserMessageToLLM(conv *Conversation) (*Message, error) 
 	params := openai.ChatCompletionNewParams{
 		Messages: conv.ToOpenAIMessages(),
 		Tools:    allTools,
-		Model:    openai.ChatModelGPT4o,
+		Model:    openai.ChatModelGPT5,
 	}
 
 	completion, err := e.client.Chat.Completions.New(ctx, params)
@@ -340,22 +340,22 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 		log.Printf("Tool call iteration %d: executing %d tool calls", iteration, len(toolCalls))
 
 		// Execute all tool calls in this round
-	for _, toolCall := range toolCalls {
+		for _, toolCall := range toolCalls {
 			var output string
 			var err error
 
 			switch toolCall.Name {
 			case "bash_command":
-			var args map[string]interface{}
-			if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
+				var args map[string]interface{}
+				if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
 					log.Printf("Error parsing tool call arguments: %v", err)
-				continue
-			}
-			command, ok := args["command"].(string)
-			if !ok {
+					continue
+				}
+				command, ok := args["command"].(string)
+				if !ok {
 					log.Printf("Tool call missing command argument")
-				continue
-			}
+					continue
+				}
 
 				// Check if command should run in background
 				background, _ := args["background"].(bool)
@@ -363,8 +363,8 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 					output, err = executeBashCommandBackground(command, e.processManager, conv.ID)
 				} else {
 					output, err = executeBashCommand(command)
-			if err != nil {
-				fmt.Printf("Error executing bash command: %v, output: %s\n", err, output)
+					if err != nil {
+						fmt.Printf("Error executing bash command: %v, output: %s\n", err, output)
 					}
 				}
 
@@ -419,18 +419,18 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 			if callback != nil {
 				callback(&toolMessage)
 			}
-	}
+		}
 
 		// Get response from OpenAI after tool execution
-	params := openai.ChatCompletionNewParams{
-		Messages: conv.ToOpenAIMessages(),
-		Tools:    allTools,
-		Model:    openai.ChatModelGPT4o,
-	}
+		params := openai.ChatCompletionNewParams{
+			Messages: conv.ToOpenAIMessages(),
+			Tools:    allTools,
+			Model:    openai.ChatModelGPT5,
+		}
 		completion, err := e.client.Chat.Completions.New(context.Background(), params)
-	if err != nil {
+		if err != nil {
 			return nil, fmt.Errorf("can't send message with tool responses: %v", err)
-	}
+		}
 
 		// Extract tool calls from the response
 		toolCalls = make([]ToolCall, len(completion.Choices[0].Message.ToolCalls))
