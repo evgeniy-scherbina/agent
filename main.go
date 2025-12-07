@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/evgeniy-scherbina/agent/chat_engine"
@@ -62,15 +65,47 @@ func main() {
 		MaxAge:           300,
 	}))
 
-	// Routes
-	r.Post("/api/chat", server.handleSendMessage)
-	r.Post("/api/chat/stream", server.handleSendMessageStream)
-	r.Get("/api/conversations/{id}", server.handleGetConversation)
-	r.Get("/api/conversations", server.handleListConversations)
-	r.Get("/api/processes", server.handleListProcesses)
-	r.Post("/api/processes/{pid}/kill", server.handleKillProcess)
+	// API Routes
+	r.Route("/api", func(r chi.Router) {
+		r.Post("/chat", server.handleSendMessage)
+		r.Post("/chat/stream", server.handleSendMessageStream)
+		r.Get("/conversations/{id}", server.handleGetConversation)
+		r.Get("/conversations", server.handleListConversations)
+		r.Get("/processes", server.handleListProcesses)
+		r.Post("/processes/{pid}/kill", server.handleKillProcess)
+	})
+
+	// Serve static files from ui/dist
+	workDir, _ := os.Getwd()
+	filesDir := filepath.Join(workDir, "ui", "dist")
+	
+	// Serve static assets directory
+	assetsDir := filepath.Join(filesDir, "assets")
+	r.Handle("/assets/*", http.StripPrefix("/assets", http.FileServer(http.Dir(assetsDir))))
+	
+	// Catch-all handler for SPA: serve files if they exist, otherwise serve index.html
+	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
+		// Don't serve index.html for API routes
+		if strings.HasPrefix(r.URL.Path, "/api") {
+			http.NotFound(w, r)
+			return
+		}
+		
+		// Check if the requested file exists
+		requestedPath := filepath.Join(filesDir, r.URL.Path)
+		if info, err := os.Stat(requestedPath); err == nil && !info.IsDir() {
+			// File exists, serve it
+			http.ServeFile(w, r, requestedPath)
+			return
+		}
+		
+		// File doesn't exist, serve index.html for SPA routing
+		indexPath := filepath.Join(filesDir, "index.html")
+		http.ServeFile(w, r, indexPath)
+	})
 
 	fmt.Println("Server starting on :8080")
+	fmt.Println("Serving frontend from: ui/dist")
 	if err := http.ListenAndServe(":8080", r); err != nil {
 		log.Fatal(err)
 	}

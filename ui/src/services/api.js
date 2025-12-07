@@ -1,4 +1,5 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080';
+// Use Coder dev URL or env var, fallback to relative path
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'https://8080--dev--agent--yevhenii--apps.dev.coder.com';
 
 /**
  * Send a message to the agent
