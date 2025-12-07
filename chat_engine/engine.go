@@ -77,11 +77,56 @@ func ToOpenAIMessageWithTools(msg *Message) openai.ChatCompletionMessageParamUni
 }
 
 // ToOpenAIMessages return messages in a format which can be used in OpenAI API
+// This function validates that assistant messages with tool_calls are followed by tool responses
 func (conv *Conversation) ToOpenAIMessages() []openai.ChatCompletionMessageParamUnion {
 	// Convert messages to OpenAI format
 	openaiMessages := make([]openai.ChatCompletionMessageParamUnion, 0, len(conv.Messages))
+	
+	// Track pending tool calls that need responses
+	pendingToolCalls := make(map[string]bool)
+	
 	for _, msg := range conv.Messages {
+		// If this is an assistant message with tool calls, track them
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 {
+			for _, toolCall := range msg.ToolCalls {
+				pendingToolCalls[toolCall.ID] = true
+			}
+		}
+		
+		// If this is a tool message, mark the corresponding tool call as resolved
+		if msg.Role == "tool" && msg.TollCallID != "" {
+			delete(pendingToolCalls, msg.TollCallID)
+		}
+		
+		// Before adding an assistant message with tool_calls, check if previous tool calls were resolved
+		if msg.Role == "assistant" && len(msg.ToolCalls) > 0 && len(pendingToolCalls) > 0 {
+			// There are still pending tool calls from a previous assistant message
+			// This indicates a corrupted state - we should add error tool messages
+			log.Printf("WARNING: Found assistant message with tool_calls while previous tool calls are still pending. This may indicate a corrupted conversation state.")
+			for toolCallID := range pendingToolCalls {
+				// Add an error tool message for the missing response
+				errorToolMsg := openai.ToolMessage(
+					fmt.Sprintf("Error: missing tool response for tool_call_id %s. Conversation state may be corrupted.", toolCallID),
+					toolCallID,
+				)
+				openaiMessages = append(openaiMessages, errorToolMsg)
+				delete(pendingToolCalls, toolCallID)
+			}
+		}
+		
 		openaiMessages = append(openaiMessages, ToOpenAIMessage(msg))
+	}
+	
+	// If there are still pending tool calls at the end, add error responses
+	if len(pendingToolCalls) > 0 {
+		log.Printf("WARNING: Conversation has %d pending tool calls without responses. Adding error tool messages.", len(pendingToolCalls))
+		for toolCallID := range pendingToolCalls {
+			errorToolMsg := openai.ToolMessage(
+				fmt.Sprintf("Error: missing tool response for tool_call_id %s. Conversation state may be corrupted.", toolCallID),
+				toolCallID,
+			)
+			openaiMessages = append(openaiMessages, errorToolMsg)
+		}
 	}
 
 	return openaiMessages
@@ -339,32 +384,35 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 		iteration++
 		log.Printf("Tool call iteration %d: executing %d tool calls", iteration, len(toolCalls))
 
+		// Track which tool calls we've processed to ensure all get responses
+		processedToolCallIDs := make(map[string]bool)
+		
 		// Execute all tool calls in this round
 		for _, toolCall := range toolCalls {
 			var output string
-			var err error
 
 			switch toolCall.Name {
 			case "bash_command":
 				var args map[string]interface{}
 				if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
 					log.Printf("Error parsing tool call arguments: %v", err)
-					continue
-				}
-				command, ok := args["command"].(string)
-				if !ok {
-					log.Printf("Tool call missing command argument")
-					continue
-				}
-
-				// Check if command should run in background
-				background, _ := args["background"].(bool)
-				if background {
-					output, err = executeBashCommandBackground(command, e.processManager, conv.ID)
+					output = fmt.Sprintf("Error: failed to parse tool call arguments: %v", err)
 				} else {
-					output, err = executeBashCommand(command)
-					if err != nil {
-						fmt.Printf("Error executing bash command: %v, output: %s\n", err, output)
+					command, ok := args["command"].(string)
+					if !ok {
+						log.Printf("Tool call missing command argument")
+						output = "Error: missing required 'command' argument"
+					} else {
+						// Check if command should run in background
+						background, _ := args["background"].(bool)
+						if background {
+							output, err = executeBashCommandBackground(command, e.processManager, conv.ID)
+						} else {
+							output, err = executeBashCommand(command)
+							if err != nil {
+								fmt.Printf("Error executing bash command: %v, output: %s\n", err, output)
+							}
+						}
 					}
 				}
 
@@ -385,27 +433,29 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 				var args map[string]interface{}
 				if err := json.Unmarshal([]byte(toolCall.Arguments), &args); err != nil {
 					log.Printf("Error parsing tool call arguments: %v", err)
-					continue
-				}
-				pidFloat, ok := args["pid"].(float64)
-				if !ok {
-					output = "Error: invalid PID"
-					break
-				}
-				pid := int(pidFloat)
-				err = e.processManager.KillProcess(pid)
-				if err != nil {
-					output = fmt.Sprintf("Error killing process: %v", err)
+					output = fmt.Sprintf("Error: failed to parse tool call arguments: %v", err)
 				} else {
-					output = fmt.Sprintf("Successfully killed process %d", pid)
+					pidFloat, ok := args["pid"].(float64)
+					if !ok {
+						output = "Error: invalid PID"
+					} else {
+						pid := int(pidFloat)
+						err = e.processManager.KillProcess(pid)
+						if err != nil {
+							output = fmt.Sprintf("Error killing process: %v", err)
+						} else {
+							output = fmt.Sprintf("Successfully killed process %d", pid)
+						}
+					}
 				}
 
 			default:
 				log.Printf("Unknown tool call: %s", toolCall.Name)
-				continue
+				output = fmt.Sprintf("Error: unknown tool call '%s'", toolCall.Name)
 			}
 
-			// Add tool response message
+			// ALWAYS add tool response message, even for errors
+			// This ensures every tool_call_id has a corresponding tool message
 			toolMessage := Message{
 				ID:         fmt.Sprintf("msg_%d", time.Now().UnixNano()),
 				Role:       "tool",
@@ -416,16 +466,66 @@ func (e *ChatEngine) executeLLMRequestedToolCalls(
 				log.Printf("Failed to save tool message to database: %v", err)
 			}
 			allNewMessages = append(allNewMessages, &toolMessage)
+			processedToolCallIDs[toolCall.ID] = true
 			if callback != nil {
 				callback(&toolMessage)
 			}
 		}
 
+		// Validate that all tool calls have responses
+		for _, toolCall := range toolCalls {
+			if !processedToolCallIDs[toolCall.ID] {
+				log.Printf("WARNING: Tool call %s was not processed, adding error response", toolCall.ID)
+				errorMessage := Message{
+					ID:         fmt.Sprintf("msg_%d", time.Now().UnixNano()),
+					Role:       "tool",
+					Content:    fmt.Sprintf("Error: tool call %s was not processed", toolCall.ID),
+					TollCallID: toolCall.ID,
+				}
+				if err := conv.AddMessageWithDB(&errorMessage, e.db); err != nil {
+					log.Printf("Failed to save error tool message to database: %v", err)
+				}
+				allNewMessages = append(allNewMessages, &errorMessage)
+				if callback != nil {
+					callback(&errorMessage)
+				}
+			}
+		}
+
+		// Validate conversation state before sending to OpenAI
+		openaiMessages := conv.ToOpenAIMessages()
+		
+		// Double-check that all assistant messages with tool_calls have corresponding tool responses
+		pendingToolCalls := make(map[string]bool)
+		for _, msg := range openaiMessages {
+			if msg.OfAssistant != nil && len(msg.OfAssistant.ToolCalls) > 0 {
+				for _, tc := range msg.OfAssistant.ToolCalls {
+					if tc.OfFunction != nil {
+						pendingToolCalls[tc.OfFunction.ID] = true
+					}
+				}
+			}
+			if msg.OfTool != nil {
+				delete(pendingToolCalls, msg.OfTool.ToolCallID)
+			}
+		}
+		
+		if len(pendingToolCalls) > 0 {
+			log.Printf("ERROR: Attempting to send messages with %d unresolved tool calls. This will fail. Adding error tool messages.", len(pendingToolCalls))
+			for toolCallID := range pendingToolCalls {
+				errorToolMsg := openai.ToolMessage(
+					fmt.Sprintf("Error: missing tool response for tool_call_id %s", toolCallID),
+					toolCallID,
+				)
+				openaiMessages = append(openaiMessages, errorToolMsg)
+			}
+		}
+		
 		// Get response from OpenAI after tool execution
 		params := openai.ChatCompletionNewParams{
-			Messages: conv.ToOpenAIMessages(),
+			Messages: openaiMessages,
 			Tools:    allTools,
-			Model:    openai.ChatModelGPT5,
+			Model:    openai.ChatModelGPT4o,
 		}
 		completion, err := e.client.Chat.Completions.New(context.Background(), params)
 		if err != nil {
